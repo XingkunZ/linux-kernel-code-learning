@@ -396,6 +396,7 @@ static void udp_flush_pending_frames(struct sock *sk)
 /*
  * Push out all pending data as one UDP datagram. Socket is locked.
  */
+// 把包从队列中发出去
 static int udp_push_pending_frames(struct sock *sk, struct udp_opt *up)
 {
 	struct inet_opt *inet = inet_sk(sk);
@@ -491,15 +492,17 @@ int udp_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
 	u16 dport;
 	u8  tos;
 	int err;
+	// corkreq传递给ip_append_data，用于指出是否应该使用缓冲区机制
 	int corkreq = up->corkflag || msg->msg_flags&MSG_MORE;
-
+	
+	//检查长度是否越界
 	if (len > 0xFFFF)
 		return -EMSGSIZE;
 
 	/* 
 	 *	Check the flags.
 	 */
-
+	//检查数据包是否有MSG_OOB
 	if (msg->msg_flags&MSG_OOB)	/* Mirror BSD error message compatibility */
 		return -EOPNOTSUPP;
 
@@ -525,6 +528,7 @@ int udp_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
 	/*
 	 *	Get and verify the address. 
 	 */
+	// 通过检查struct msghrd结构的msg_name字段，确定目的地址是否合法
 	if (msg->msg_name) {
 		struct sockaddr_in * usin = (struct sockaddr_in*)msg->msg_name;
 		if (msg->msg_namelen < sizeof(*usin))
@@ -539,6 +543,8 @@ int udp_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
 		if (dport == 0)
 			return -EINVAL;
 	} else {
+		//即使目的地址为空，但如果套接字处于TCP_ESTABLISHED状态
+		//仍然认为目的地址合法，允许继续传送数据
 		if (sk->sk_state != TCP_ESTABLISHED)
 			return -EDESTADDRREQ;
 		daddr = inet->daddr;
@@ -551,6 +557,7 @@ int udp_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
 	ipc.addr = inet->saddr;
 
 	ipc.oif = sk->sk_bound_dev_if;
+	//如果是控制报文，通过ip_cmsg_send处理控制报文
 	if (msg->msg_controllen) {
 		err = ip_cmsg_send(msg, &ipc);
 		if (err)
@@ -572,6 +579,8 @@ int udp_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
 		connected = 0;
 	}
 	tos = RT_TOS(inet->tos);
+
+	//确定是否需要路由信息
 	if (sk->sk_localroute || (msg->msg_flags & MSG_DONTROUTE) || 
 	    (ipc.opt && ipc.opt->is_strictroute)) {
 		tos |= RTO_ONLINK;
@@ -586,19 +595,35 @@ int udp_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
 		connected = 0;
 	}
 
+	//如果已经建立了套接字连接，则不需要重新查询路由
+	//直接从套接字的管理结构中返回路由表信息，并记录到rt中
 	if (connected)
 		rt = (struct rtable*)sk_dst_check(sk, 0);
-
+	
+	//对尚无路由信息的套接字，需要调用ip_route_output_flow
+	//查询路由表，得到路由信息
+	//struct flowi 结构记录了查找路由表的索引信息
 	if (rt == NULL) {
-		struct flowi fl = { .oif = ipc.oif,
-				    .nl_u = { .ip4_u =
-					      { .daddr = faddr,
-						.saddr = saddr,
-						.tos = tos } },
-				    .proto = IPPROTO_UDP,
-				    .uli_u = { .ports =
-					       { .sport = inet->sport,
-						 .dport = dport } } };
+		struct flowi fl = { 
+			.oif = ipc.oif,
+			.nl_u = { 
+				.ip4_u ={ 
+					.daddr = faddr,
+					.saddr = saddr,
+					.tos = tos 
+				} 
+			},
+			.proto = IPPROTO_UDP,
+			.uli_u = { 
+				.ports ={ 
+					.sport = inet->sport,
+					.dport = dport 
+				} 
+			} 
+		};
+		//获取路由表项，通过记录路由表项的变量rt返回，并得到控制
+		//函数dev_output用到的skb->dst->outout指针，比如指向ip_output
+		//函数dev_queue_xmit用到的dev->hard_start_xmit指针，比如指向网络设备驱动程序的发送函数
 		err = ip_route_output_flow(&rt, &fl, sk, !(msg->msg_flags&MSG_DONTWAIT));
 		if (err)
 			goto out;
@@ -608,6 +633,8 @@ int udp_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
 		    !sock_flag(sk, SOCK_BROADCAST))
 			goto out;
 		if (connected)
+			//令sk的dst字段指向rt->u.dst
+			//见sk_dst_get的代码行：dst = sk->sk_dst_cache;
 			sk_dst_set(sk, dst_clone(&rt->u.dst));
 	}
 
@@ -640,12 +667,17 @@ back_from_confirm:
 
 do_append_data:
 	up->len += ulen;
+	//对UDP数据包进行分片处理，为IP层分片处理做好准备
 	err = ip_append_data(sk, ip_generic_getfrag, msg->msg_iov, ulen, 
 			sizeof(struct udphdr), &ipc, rt, 
 			corkreq ? msg->msg_flags|MSG_MORE : msg->msg_flags);
 	if (err)
 		udp_flush_pending_frames(sk);
 	else if (!corkreq)
+		// 上层应用指定flag为MSG_MORE时，corkreq=1
+		// 如果上层应用指定flag为MSG_MORE,ip_append_data之后不会马上调用
+		// udp_push_pending_frames执行ip_push_pending_frames。否则：
+		// ip_append_data之后马上执行ip_push_pending_frames，把包从队列中发送出去
 		err = udp_push_pending_frames(sk, up);
 	release_sock(sk);
 

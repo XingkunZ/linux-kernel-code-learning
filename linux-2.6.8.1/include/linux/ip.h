@@ -168,25 +168,26 @@ static inline struct inet_opt * inet_sk(const struct sock *__sk)
 
 //IPv4报头
 struct iphdr {
-#if defined(__LITTLE_ENDIAN_BITFIELD)
-	__u8	ihl:4,
-		version:4;
-#elif defined (__BIG_ENDIAN_BITFIELD)
-	__u8	version:4,
-  		ihl:4;
+#if defined(__LITTLE_ENDIAN_BITFIELD) // 小端字节序
+	__u8	ihl:4, // 包头长度
+		version:4; // 版本号
+#elif defined (__BIG_ENDIAN_BITFIELD) // 大端字节序
+	__u8	version:4, //版本号
+  		ihl:4; //包头长度
 #else
 #error	"Please fix <asm/byteorder.h>"
 #endif
 	__u8	tos;
-	__u16	tot_len;
-	__u16	id;
-	__u16	frag_off;
+	__u16	tot_len; // 总长度
+	__u16	id; // 标志
+	__u16	frag_off; // 偏移量
 	__u8	ttl;
-	__u8	protocol;
-	__u16	check;
-	__u32	saddr;
-	__u32	daddr;
+	__u8	protocol; // 协议
+	__u16	check; // 校验和
+	__u32	saddr; // 源地址
+	__u32	daddr; // 目的地址
 	/*The options start here. */
+	// ip选项是可选的
 };
 
 struct ip_auth_hdr {

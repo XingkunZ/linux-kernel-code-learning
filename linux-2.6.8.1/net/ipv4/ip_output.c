@@ -720,6 +720,10 @@ csum_page(struct page *page, int offset, int copy)
  *
  *	LATER: length must be adjusted by pad at tail, when it is required.
  */
+// 创建套接字缓冲区sk_buff，为IP层数据分片做好准备
+// 该函数根据路由查询得到的接口MTU，把超过MTU长度的数据分片保存在多个套接字缓冲区中
+// 并插入套接字的发送队列sk_write_queue中。
+// 对于较大的数据包，该函数可能循环多次
 int ip_append_data(struct sock *sk,
 		   int getfrag(void *from, char *to, int offset, int len,
 			       int odd, struct sk_buff *skb),
@@ -737,16 +741,20 @@ int ip_append_data(struct sock *sk,
 	int copy;
 	int err;
 	int offset = 0;
-	unsigned int maxfraglen, fragheaderlen;
+	unsigned int maxfraglen;//分片的最大长度
+	unsigned int fragheaderlen;//分片首部长度
 	int csummode = CHECKSUM_NONE;
 
 	if (flags&MSG_PROBE)
 		return 0;
 
+	// 判断套接字发送队列sk->sk_write_queue是否为空
+	// 如果队列为空，则对inet->corkt初始化，为分片做准备
 	if (skb_queue_empty(&sk->sk_write_queue)) {
 		/*
 		 * setup for corking.
 		 */
+		// 如果ip选项不为空，则在inet->cork中设置选项处理记录
 		opt = ipc->opt;
 		if (opt) {
 			if (inet->cork.opt == NULL) {
@@ -759,11 +767,15 @@ int ip_append_data(struct sock *sk,
 			inet->cork.addr = ipc->addr;
 		}
 		dst_hold(&rt->u.dst);
+		// 得到用来分片的MTU
 		inet->cork.fragsize = mtu = dst_pmtu(&rt->u.dst);
+		// inet->cork.rt是套接字sk携带的路由表项信息
+		// 函数ip_push_pending_frames由代码行struct rtable *rt = inet->cork.rt得到路由表项
 		inet->cork.rt = rt;
 		inet->cork.length = 0;
-		sk->sk_sndmsg_page = NULL;
-		sk->sk_sndmsg_off = 0;
+		// 初始化分片位置信息
+		sk->sk_sndmsg_page = NULL; // 指向分片首地址
+		sk->sk_sndmsg_off = 0; // 下一分片的存放位置
 		if ((exthdrlen = rt->u.dst.header_len) != 0) {
 			length += exthdrlen;
 			transhdrlen += exthdrlen;
@@ -773,13 +785,17 @@ int ip_append_data(struct sock *sk,
 		if (inet->cork.flags & IPCORK_OPT)
 			opt = inet->cork.opt;
 
+		// 如果不是第一个分片，则套接字缓冲区的data内容中没有头部格式信息
 		transhdrlen = 0;
 		exthdrlen = 0;
 		mtu = inet->cork.fragsize;
 	}
+	// 从路由表项中得到网络设备的硬件头部信息
 	hh_len = LL_RESERVED_SPACE(rt->u.dst.dev);
 
+	//分片首部的长度
 	fragheaderlen = sizeof(struct iphdr) + (opt ? opt->optlen : 0);
+	//分片的最大长度
 	maxfraglen = ((mtu-fragheaderlen) & ~7) + fragheaderlen;
 
 	if (inet->cork.length + length > 0xFFFF - fragheaderlen) {
