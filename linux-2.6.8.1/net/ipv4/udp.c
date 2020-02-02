@@ -396,33 +396,37 @@ static void udp_flush_pending_frames(struct sock *sk)
 /*
  * Push out all pending data as one UDP datagram. Socket is locked.
  */
-// 把包从队列中发出去
+// 为数据包添加UDP头部，调用函数ip_push_pending_frames把包从队列中发出去
 static int udp_push_pending_frames(struct sock *sk, struct udp_opt *up)
 {
 	struct inet_opt *inet = inet_sk(sk);
 	struct flowi *fl = &inet->cork.fl;
-	struct sk_buff *skb;
+	struct sk_buff *skb; // 用于存套接字队列中的一个套接字缓冲区
 	struct udphdr *uh;
 	int err = 0;
 
 	/* Grab the skbuff where UDP header space exists. */
+	// 从套接字队列中的到一个套接字缓冲区
 	if ((skb = skb_peek(&sk->sk_write_queue)) == NULL)
 		goto out;
 
 	/*
 	 * Create a UDP header
 	 */
+	// 为数据包设置UDP头部信息：源端口、目的端口和长度
 	uh = skb->h.uh;
 	uh->source = fl->fl_ip_sport;
 	uh->dest = fl->fl_ip_dport;
 	uh->len = htons(up->len);
 	uh->check = 0;
-
+	
+	// 如果不需要校验和计算，则直接发送数据包
 	if (sk->sk_no_check == UDP_CSUM_NOXMIT) {
 		skb->ip_summed = CHECKSUM_NONE;
 		goto send;
 	}
 
+	// 套接字队列长度为1时，只有一个分片
 	if (skb_queue_len(&sk->sk_write_queue) == 1) {
 		/*
 		 * Only one fragment on the socket.
@@ -446,6 +450,7 @@ static int udp_push_pending_frames(struct sock *sk, struct udp_opt *up)
 		 * fragments on the socket so that all csums of sk_buffs
 		 * should be together.
 		 */
+		// 校验和处理
 		if (skb->ip_summed == CHECKSUM_HW) {
 			int offset = (unsigned char *)uh - skb->data;
 			skb->csum = skb_checksum(skb, offset, skb->len - offset, 0);
@@ -465,6 +470,7 @@ static int udp_push_pending_frames(struct sock *sk, struct udp_opt *up)
 			uh->check = -1;
 	}
 send:
+	// 准备IP协议处理
 	err = ip_push_pending_frames(sk);
 out:
 	up->len = 0;

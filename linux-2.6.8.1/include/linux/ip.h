@@ -177,11 +177,11 @@ struct iphdr {
 #else
 #error	"Please fix <asm/byteorder.h>"
 #endif
-	__u8	tos;
+	__u8	tos; // 服务类型
 	__u16	tot_len; // 总长度
 	__u16	id; // 标志
 	__u16	frag_off; // 偏移量
-	__u8	ttl;
+	__u8	ttl; // 生命期
 	__u8	protocol; // 协议
 	__u16	check; // 校验和
 	__u32	saddr; // 源地址

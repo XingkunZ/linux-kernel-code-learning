@@ -767,12 +767,14 @@ int ip_append_data(struct sock *sk,
 			inet->cork.addr = ipc->addr;
 		}
 		dst_hold(&rt->u.dst);
+
 		// 得到用来分片的MTU
 		inet->cork.fragsize = mtu = dst_pmtu(&rt->u.dst);
 		// inet->cork.rt是套接字sk携带的路由表项信息
 		// 函数ip_push_pending_frames由代码行struct rtable *rt = inet->cork.rt得到路由表项
 		inet->cork.rt = rt;
 		inet->cork.length = 0;
+
 		// 初始化分片位置信息
 		sk->sk_sndmsg_page = NULL; // 指向分片首地址
 		sk->sk_sndmsg_off = 0; // 下一分片的存放位置
@@ -793,7 +795,7 @@ int ip_append_data(struct sock *sk,
 	// 从路由表项中得到网络设备的硬件头部信息
 	hh_len = LL_RESERVED_SPACE(rt->u.dst.dev);
 
-	//分片首部的长度
+	//分片首部的长度=ip头部+ip选项长度（如果有的话）
 	fragheaderlen = sizeof(struct iphdr) + (opt ? opt->optlen : 0);
 	//分片的最大长度
 	maxfraglen = ((mtu-fragheaderlen) & ~7) + fragheaderlen;
@@ -807,12 +809,14 @@ int ip_append_data(struct sock *sk,
 	 * transhdrlen > 0 means that this is the first fragment and we wish
 	 * it won't be fragmented in the future.
 	 */
+	// 当transhdrlen > 0，表示这是第一个分片 
 	if (transhdrlen &&
 	    length + fragheaderlen <= maxfraglen &&
 	    rt->u.dst.dev->features&(NETIF_F_IP_CSUM|NETIF_F_NO_CSUM|NETIF_F_HW_CSUM) &&
 	    !exthdrlen)
 		csummode = CHECKSUM_HW;
-
+	
+	//累计分片数据的总长度
 	inet->cork.length += length;
 
 	/* So, what's going on in the loop below?
@@ -828,10 +832,15 @@ int ip_append_data(struct sock *sk,
 	 *    it is not necessary. Not a big bug, but needs a fix.
 	 */
 
+	//如果是空队列，是第一次分片，需要分配一个新的套接字缓冲区
 	if ((skb = skb_peek_tail(&sk->sk_write_queue)) == NULL)
 		goto alloc_new_skb;
-
+	
+	//把尚未插入队列的数h有据插入套接字发送队列中
+	//length>0 说明还有数据剩下，需要继续分片并插入队列中
 	while (length > 0) {
+		// 如果当前套接字缓冲区中没有空间装下剩下的数据，
+		// 则要分配新套接字缓冲区给剩下的数据
 		if ((copy = maxfraglen - skb->len) <= 0) {
 			char *data;
 			unsigned int datalen;
@@ -843,12 +852,14 @@ alloc_new_skb:
 			datalen = maxfraglen - fragheaderlen;
 			if (datalen > length)
 				datalen = length;
-
+			
+			//分片长度等于数据长度加上分片头部长度
 			fraglen = datalen + fragheaderlen;
 			if ((flags & MSG_MORE) && 
 			    !(rt->u.dst.dev->features&NETIF_F_SG))
 				alloclen = maxfraglen;
 			else
+				//实际分配的数据空间长度=数据长度+分片头部长度
 				alloclen = datalen + fragheaderlen;
 
 			/* The last fragment gets additional space at tail.
@@ -856,15 +867,18 @@ alloc_new_skb:
 			 * because we have no idea what fragment will be
 			 * the last.
 			 */
+			//为最后一个碎片分配更多的空间
 			if (datalen == length)
 				alloclen += rt->u.dst.trailer_len;
-
+			
+			//分配套接字缓冲区
 			if (transhdrlen) {
 				skb = sock_alloc_send_skb(sk, 
 						alloclen + hh_len + 15,
 						(flags & MSG_DONTWAIT), &err);
 			} else {
 				skb = NULL;
+				//检查当前空间能否保存一个套接字缓冲区
 				if (atomic_read(&sk->sk_wmem_alloc) <=
 				    2 * sk->sk_sndbuf)
 					skb = sock_wmalloc(sk, 
@@ -879,26 +893,36 @@ alloc_new_skb:
 			/*
 			 *	Fill in the control structures
 			 */
+			//设置IP数据包的校验和模式
 			skb->ip_summed = csummode;
+			//初始化校验和
 			skb->csum = 0;
+			//在套接字缓冲区中预留容纳硬件头部的空间
 			skb_reserve(skb, hh_len);
 
 			/*
 			 *	Find where to start putting bytes.
 			 */
+			// 为套接字缓冲区设置数据存放的起始位置
 			data = skb_put(skb, fraglen);
 			skb->nh.raw = data + exthdrlen;
 			data += fragheaderlen;
 			skb->h.raw = data + exthdrlen;
 
+			// 计算实际需要复制的数据长度
 			copy = datalen - transhdrlen;
+
+			// 把数据复制到套接字缓冲区中
 			if (copy > 0 && getfrag(from, data + transhdrlen, offset, copy, 0, skb) < 0) {
 				err = -EFAULT;
 				kfree_skb(skb);
 				goto error;
 			}
 
+			// 计算分片的偏移位置
 			offset += copy;
+
+			// 计算尚未分配套接字缓冲区的数据长度
 			length -= datalen;
 			transhdrlen = 0;
 			exthdrlen = 0;
@@ -907,13 +931,16 @@ alloc_new_skb:
 			/*
 			 * Put the packet on the pending queue.
 			 */
+			// 把已分配得到的套接字缓冲区插入套接字发送队列中
 			__skb_queue_tail(&sk->sk_write_queue, skb);
 			continue;
 		}
 
 		if (copy > length)
 			copy = length;
-
+		
+		// 判断网络设备是否设置了scatter/gather
+		// 以下代码按scatter/gather设置进行分片处理
 		if (!(rt->u.dst.dev->features&NETIF_F_SG)) {
 			unsigned int off;
 
@@ -986,6 +1013,12 @@ error:
 ssize_t	ip_append_page(struct sock *sk, struct page *page,
 		       int offset, size_t size, int flags)
 {
+	/*
+	 * struct inet_sock对象存储了所有类型的INET套接字信息
+	 * 可访问UDP协议套接字/TCP协议套接字
+	 * 其中，struct inet_opt inet 成员保存套接字选项
+	 * inet中的cork成员存储了与分片有关的控制信息
+	*/
 	struct inet_opt *inet = inet_sk(sk);
 	struct sk_buff *skb;
 	struct rtable *rt;
@@ -1104,14 +1137,18 @@ int ip_push_pending_frames(struct sock *sk)
 {
 	struct sk_buff *skb, *tmp_skb;
 	struct sk_buff **tail_skb;
+
+	// 通过sk中的struct inet_opt结构获得路由表项信息
 	struct inet_opt *inet = inet_sk(sk);
 	struct ip_options *opt = NULL;
 	struct rtable *rt = inet->cork.rt;
+
 	struct iphdr *iph;
 	int df = 0;
 	__u8 ttl;
 	int err = 0;
 
+	//检查套接字发送队列是否为空，并返回队首的套接字缓冲区
 	if ((skb = __skb_dequeue(&sk->sk_write_queue)) == NULL)
 		goto out;
 	tail_skb = &(skb_shinfo(skb)->frag_list);
@@ -1119,6 +1156,7 @@ int ip_push_pending_frames(struct sock *sk)
 	/* move skb->data to ip header from ext header */
 	if (skb->data < skb->nh.raw)
 		__skb_pull(skb, skb->nh.raw - skb->data);
+	//遍历套接字发送队列，调整数据长度
 	while ((tmp_skb = __skb_dequeue(&sk->sk_write_queue)) != NULL) {
 		__skb_pull(tmp_skb, skb->h.raw - skb->nh.raw);
 		*tail_skb = tmp_skb;
@@ -1141,40 +1179,56 @@ int ip_push_pending_frames(struct sock *sk)
 	/* DF bit is set when we want to see DF on outgoing frames.
 	 * If local_df is set too, we still allow to fragment this frame
 	 * locally. */
+	// 得到分片标志
 	if (inet->pmtudisc == IP_PMTUDISC_DO ||
 	    (!skb_shinfo(skb)->frag_list && ip_dont_fragment(sk, &rt->u.dst)))
 		df = htons(IP_DF);
 
 	if (inet->cork.flags & IPCORK_OPT)
 		opt = inet->cork.opt;
-
+	
+	// 获取TTL
 	if (rt->rt_type == RTN_MULTICAST)
 		ttl = inet->mc_ttl;
 	else
 		ttl = ip_select_ttl(inet, &rt->u.dst);
-
+	
+	// 将套接字缓冲区中的data所指区域强制转换成struct iphdr结构
 	iph = (struct iphdr *)skb->data;
+	// 设置IP包头的版本号
 	iph->version = 4;
+	// 设置IP包头长度
 	iph->ihl = 5;
+	// 设置IP选项
 	if (opt) {
 		iph->ihl += opt->optlen>>2;
 		ip_options_build(skb, opt, inet->cork.addr, rt, 0);
 	}
+	// 设置服务类型TOS
 	iph->tos = inet->tos;
+	// 设置IP包总长度
 	iph->tot_len = htons(skb->len);
+	// 设置分片的偏移量
 	iph->frag_off = df;
+	// 设置IP包的标志号
 	if (!df) {
 		__ip_select_ident(iph, &rt->u.dst, 0);
 	} else {
 		iph->id = htons(inet->id++);
 	}
+	// 设置IP包头的ttl字段
 	iph->ttl = ttl;
+	// 设置IP头部中的协议字段
 	iph->protocol = sk->sk_protocol;
+	// 设置IP头部的源IP地址，目的IP地址
 	iph->saddr = rt->rt_src;
 	iph->daddr = rt->rt_dst;
+	// 计算校验和并设置IP头部的校验和字段
 	ip_send_check(iph);
 
 	skb->priority = sk->sk_priority;
+
+	// 
 	skb->dst = dst_clone(&rt->u.dst);
 
 	/* Netfilter gets whole the not fragmented skb. */
