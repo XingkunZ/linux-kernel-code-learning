@@ -1141,7 +1141,9 @@ int ip_push_pending_frames(struct sock *sk)
 	// 通过sk中的struct inet_opt结构获得路由表项信息
 	struct inet_opt *inet = inet_sk(sk);
 	struct ip_options *opt = NULL;
-	struct rtable *rt = inet->cork.rt;
+	struct rtable *rt = inet->cork.rt; // rt路由信息
+	// 这里的rt参数是udp_sendmsg调用ip_append_data时指定的，
+	// rt记录了ip_route_output_flow查找路由表所返回的路由表项信息
 
 	struct iphdr *iph;
 	int df = 0;
@@ -1228,10 +1230,16 @@ int ip_push_pending_frames(struct sock *sk)
 
 	skb->priority = sk->sk_priority;
 
-	// 
+	/* ！！重要！！ */
+	// 为套接字缓冲区指定了路由表项信息
+	// 为数据包进入IP发送流程设置了具体办法
+	// （skb->dst->output = ip_output）
 	skb->dst = dst_clone(&rt->u.dst);
 
+	// 此时，程序已经为dst_output配置完skb处理信息
+
 	/* Netfilter gets whole the not fragmented skb. */
+	// 内核将从这里转到dst_output函数，通过ip_output函数进入IP发送流程
 	err = NF_HOOK(PF_INET, NF_IP_LOCAL_OUT, skb, NULL, 
 		      skb->dst->dev, dst_output);
 	if (err) {

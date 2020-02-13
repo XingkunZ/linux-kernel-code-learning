@@ -682,8 +682,8 @@ do_append_data:
 	else if (!corkreq)
 		// 上层应用指定flag为MSG_MORE时，corkreq=1
 		// 如果上层应用指定flag为MSG_MORE,ip_append_data之后不会马上调用
-		// udp_push_pending_frames执行ip_push_pending_frames。否则：
-		// ip_append_data之后马上执行ip_push_pending_frames，把包从队列中发送出去
+		// udp_push_pending_frames执行ip_push_pending_frames。
+		// 否则：ip_append_data之后马上执行ip_push_pending_frames，把包从队列中发送出去
 		err = udp_push_pending_frames(sk, up);
 	release_sock(sk);
 

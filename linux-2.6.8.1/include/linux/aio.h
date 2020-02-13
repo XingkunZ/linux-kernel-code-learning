@@ -43,6 +43,9 @@ struct kioctx;
 #define kiocbIsKicked(iocb)	test_bit(KIF_KICKED, &(iocb)->ki_flags)
 #define kiocbIsCancelled(iocb)	test_bit(KIF_CANCELLED, &(iocb)->ki_flags)
 
+// 在Linux内核中，每个IO请求都对应一个kiocb结构体，
+// 其ki_filp成员指向对应的file指针，
+// 通过is_sync_kiocb可以判断某Kiocb是否为同步IO请求(非真表示异步IO请求)。
 struct kiocb {
 	struct list_head	ki_run_list;
 	long			ki_flags;

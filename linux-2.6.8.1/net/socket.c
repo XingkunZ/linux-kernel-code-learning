@@ -603,7 +603,8 @@ int sock_recvmsg(struct socket *sock, struct msghdr *msg,
 	struct sock_iocb siocb;
 	int ret;
 
-        init_sync_kiocb(&iocb, NULL);
+	//
+    init_sync_kiocb(&iocb, NULL);
 	iocb.private = &siocb;
 	ret = __sock_recvmsg(&iocb, sock, msg, size, flags);
 	if (-EIOCBQUEUED == ret)

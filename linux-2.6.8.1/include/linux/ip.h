@@ -135,6 +135,8 @@ struct inet_opt {
 	 * Following members are used to retain the infomation to build
 	 * an ip header on each ip fragmentation while the socket is corked.
 	 */
+	// 1.cork保存了同一个IP包中的一些共用信息。主要用于分片，或者多个数据组成一个IP报文发送时；
+	// 2.cork在udp中可以保存UDP首部需要的信息。这样当append UDP数据时，不需要通过参数传递这些信息；
 	struct {
 		unsigned int		flags;
 		unsigned int		fragsize;
