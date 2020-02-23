@@ -406,7 +406,7 @@ static int udp_push_pending_frames(struct sock *sk, struct udp_opt *up)
 	int err = 0;
 
 	/* Grab the skbuff where UDP header space exists. */
-	// 从套接字队列中的到一个套接字缓冲区
+	// 从套接字发送队列中得到一个套接字缓冲区
 	if ((skb = skb_peek(&sk->sk_write_queue)) == NULL)
 		goto out;
 

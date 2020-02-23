@@ -749,7 +749,7 @@ int ip_append_data(struct sock *sk,
 		return 0;
 
 	// 判断套接字发送队列sk->sk_write_queue是否为空
-	// 如果队列为空，则对inet->corkt初始化，为分片做准备
+	// 如果队列为空，则对inet->cork初始化，为分片做准备
 	if (skb_queue_empty(&sk->sk_write_queue)) {
 		/*
 		 * setup for corking.
@@ -836,7 +836,7 @@ int ip_append_data(struct sock *sk,
 	if ((skb = skb_peek_tail(&sk->sk_write_queue)) == NULL)
 		goto alloc_new_skb;
 	
-	//把尚未插入队列的数h有据插入套接字发送队列中
+	//把尚未插入队列的数据插入套接字发送队列中
 	//length>0 说明还有数据剩下，需要继续分片并插入队列中
 	while (length > 0) {
 		// 如果当前套接字缓冲区中没有空间装下剩下的数据，
