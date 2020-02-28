@@ -1077,12 +1077,14 @@ static inline int sock_queue_rcv_skb(struct sock *sk, struct sk_buff *skb)
 	   with socket lock! We assume that users of this
 	   function are lock free.
 	*/
+	// 套接字的包过滤处理 
 	err = sk_filter(sk, skb, 1);
 	if (err)
 		goto out;
 
-	skb->dev = NULL;
-	skb_set_owner_r(skb, sk);
+	// 设置套接字缓冲区skb的一些数据
+	skb->dev = NULL; // dev指针置空
+	skb_set_owner_r(skb, sk); // skb->sk指针指向当前套接字结构sk
 
 	/* Cache the SKB length before we tack it onto the receive
 	 * queue.  Once it is added it no longer belongs to us and
@@ -1091,8 +1093,10 @@ static inline int sock_queue_rcv_skb(struct sock *sk, struct sk_buff *skb)
 	 */
 	skb_len = skb->len;
 
+	// 插入套接字接收队列的尾部
 	skb_queue_tail(&sk->sk_receive_queue, skb);
 
+	// 通知被阻塞的操作，套接字接收队列中已有数据就绪
 	if (!sock_flag(sk, SOCK_DEAD))
 		sk->sk_data_ready(sk, skb_len);
 out:

@@ -309,12 +309,16 @@ int ip_queue_xmit(struct sk_buff *skb, int ipfragok)
 	/* Skip all of this if the packet is already routed,
 	 * f.e. by something like SCTP.
 	 */
+	// 得到套接字缓冲区曾经记录的路由表项信息，写入变量rt中
 	rt = (struct rtable *) skb->dst;
 	if (rt != NULL)
 		goto packet_routed;
 
 	/* Make sure we can route this packet. */
+	// 确认套接字缓存的路由是否有效，并返回给变量rt
 	rt = (struct rtable *)__sk_dst_check(sk, 0);
+	// 建立TCP连接后，路由表项信息被保存在套接字缓冲区中
+	// 如果没有缓存的路由表项，则查找路由表，获取路由表项信息
 	if (rt == NULL) {
 		u32 daddr;
 
@@ -338,12 +342,16 @@ int ip_queue_xmit(struct sk_buff *skb, int ipfragok)
 			 * keep trying until route appears or the connection times
 			 * itself out.
 			 */
+			// 查找路由，把路由表信息返回给rt变量
 			if (ip_route_output_flow(&rt, &fl, sk, 0))
 				goto no_route;
 		}
 		__sk_dst_set(sk, &rt->u.dst);
 		tcp_v4_setup_caps(sk, &rt->u.dst);
 	}
+	/* 重要 */
+	// 为套接字缓冲区制定了路由表项信息
+	// 为数据包进入IP发送流程设置了具体方法
 	skb->dst = dst_clone(&rt->u.dst);
 
 packet_routed:
@@ -351,7 +359,9 @@ packet_routed:
 		goto no_route;
 
 	/* OK, we know where to send it, allocate and build IP header. */
+	// 在套接字缓冲区中为IP头部留下IP头部空间
 	iph = (struct iphdr *) skb_push(skb, sizeof(struct iphdr) + (opt ? opt->optlen : 0));
+	// 设置IP头部的协议信息
 	*((__u16 *)iph)	= htons((4 << 12) | (5 << 8) | (inet->tos & 0xff));
 	iph->tot_len = htons(skb->len);
 	if (ip_dont_fragment(sk, &rt->u.dst) && !ipfragok)
@@ -365,6 +375,7 @@ packet_routed:
 	skb->nh.iph   = iph;
 	/* Transport layer set skb->h.foo itself. */
 
+	// 构建IP选项信息
 	if(opt && opt->optlen) {
 		iph->ihl += opt->optlen >> 2;
 		ip_options_build(skb, opt, inet->daddr, rt, 0);
@@ -382,13 +393,17 @@ packet_routed:
 				skb_shinfo(skb)->tso_size - 1;
 	}
 
+	// 设置IP包的标识符
 	ip_select_ident_more(iph, &rt->u.dst, sk, skb_shinfo(skb)->tso_segs);
 
 	/* Add an IP checksum. */
+	// 设置IP校验和
 	ip_send_check(iph);
 
 	skb->priority = sk->sk_priority;
 
+	// 此时，已经为dst_output配置了必要的skb信息
+	// 内核将从这里转到dst_output函数，通过ip_output函数进入IP层处理
 	return NF_HOOK(PF_INET, NF_IP_LOCAL_OUT, skb, NULL, rt->u.dst.dev,
 		       dst_output);
 

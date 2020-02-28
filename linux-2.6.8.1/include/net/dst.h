@@ -227,6 +227,7 @@ static inline int dst_output(struct sk_buff *skb)
 	int err;
 
 	for (;;) {
+		// 这里实际调用了ip_output函数
 		err = skb->dst->output(&skb);
 
 		if (likely(err == 0))

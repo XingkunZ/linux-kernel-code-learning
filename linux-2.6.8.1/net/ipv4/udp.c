@@ -819,27 +819,36 @@ int udp_recvmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
 	/*
 	 *	Check any passed addresses
 	 */
+	// 检查地址长度
 	if (addr_len)
 		*addr_len=sizeof(*sin);
 
+	// 检查队列中是否有错误信息
 	if (flags & MSG_ERRQUEUE)
 		return ip_recv_error(sk, msg, len);
 
 try_again:
+	// 从套接字sk的接收队列中取出套接字缓冲区skb
 	skb = skb_recv_datagram(sk, flags, noblock, &err);
 	if (!skb)
 		goto out;
   
-  	copied = skb->len - sizeof(struct udphdr);
+  	// 准备复制数据：
+	copied = skb->len - sizeof(struct udphdr);// 需要复制的数据不包括UDP头部；
+	// 如果缓冲区长度不够，则设置缓冲区长度，并作截断标志
 	if (copied > len) {
 		copied = len;
 		msg->msg_flags |= MSG_TRUNC;
 	}
 
+	// 校验判断
 	if (skb->ip_summed==CHECKSUM_UNNECESSARY) {
+		// 如果不需要校验，
+		// 则把套接字缓冲区skb数据复制到msg->msg_iov结构中，以便应用程序从接收缓冲区中读取数据
 		err = skb_copy_datagram_iovec(skb, sizeof(struct udphdr), msg->msg_iov,
 					      copied);
 	} else if (msg->msg_flags&MSG_TRUNC) {
+		// 先校验，再把套接字缓冲区skb数据复制到msg->msg_iov结构
 		if (__udp_checksum_complete(skb))
 			goto csum_copy_err;
 		err = skb_copy_datagram_iovec(skb, sizeof(struct udphdr), msg->msg_iov,
@@ -854,9 +863,9 @@ try_again:
 	if (err)
 		goto out_free;
 
-	sock_recv_timestamp(msg, sk, skb);
+	sock_recv_timestamp(msg, sk, skb);//记录接收时间
 
-	/* Copy the address. */
+	/* Copy the address. *///复制地址信息
 	if (sin)
 	{
 		sin->sin_family = AF_INET;
@@ -864,6 +873,7 @@ try_again:
 		sin->sin_addr.s_addr = skb->nh.iph->saddr;
 		memset(sin->sin_zero, 0, sizeof(sin->sin_zero));
   	}
+	//   处理IP选项
 	if (inet->cmsg_flags)
 		ip_cmsg_recv(msg, skb);
 
@@ -880,6 +890,7 @@ csum_copy_err:
 	UDP_INC_STATS_BH(UDP_MIB_INERRORS);
 
 	/* Clear queue. */
+	// 如果用户程序接收数据采用MSG_PEEK标志，则读出数据，但不删除套接字队列中的缓冲。
 	if (flags&MSG_PEEK) {
 		int clear = 0;
 		spin_lock_irq(&sk->sk_receive_queue.lock);
@@ -1020,6 +1031,7 @@ static int udp_encap_rcv(struct sock * sk, struct sk_buff *skb)
  *
  * Note that in the success and error cases, the skb is assumed to
  * have either been requeued or freed.
+ * 通过sock_queue_rcv_skb把收到的套接字缓冲区skb插入套接字sk的接收队列中。
  */
 static int udp_queue_rcv_skb(struct sock * sk, struct sk_buff *skb)
 {
@@ -1033,6 +1045,7 @@ static int udp_queue_rcv_skb(struct sock * sk, struct sk_buff *skb)
 		return -1;
 	}
 
+	// 对IPSEC封装包进行分析处理
 	if (up->encap_type) {
 		/*
 		 * This is an encapsulation socket, so let's see if this is
@@ -1060,15 +1073,19 @@ static int udp_queue_rcv_skb(struct sock * sk, struct sk_buff *skb)
 		/* FALLTHROUGH -- it's a UDP Packet */
 	}
 
+	// 如果需要校验，则计算校验和
 	if (sk->sk_filter && skb->ip_summed != CHECKSUM_UNNECESSARY) {
 		if (__udp_checksum_complete(skb)) {
 			UDP_INC_STATS_BH(UDP_MIB_INERRORS);
 			kfree_skb(skb);
 			return -1;
 		}
+		// 标记不需要校验
 		skb->ip_summed = CHECKSUM_UNNECESSARY;
 	}
 
+	// 调用函数sock_queue_rcv_skb将套接字缓冲区skb
+	// 插入套接字sk的接收队列中
 	if (sock_queue_rcv_skb(sk,skb)<0) {
 		UDP_INC_STATS_BH(UDP_MIB_INERRORS);
 		kfree_skb(skb);
