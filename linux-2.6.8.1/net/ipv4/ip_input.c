@@ -198,12 +198,14 @@ int ip_call_ra_chain(struct sk_buff *skb)
 
 static inline int ip_local_deliver_finish(struct sk_buff *skb)
 {
+	// 得到IP报头长度
 	int ihl = skb->nh.iph->ihl*4;
 
 #ifdef CONFIG_NETFILTER_DEBUG
 	nf_debug_ip_local_deliver(skb);
 #endif /*CONFIG_NETFILTER_DEBUG*/
 
+	// 把套接字缓冲区中的数据从IP包中取出
 	__skb_pull(skb, ihl);
 
 	/* Free reference early: we don't need it any more, and it may
@@ -216,13 +218,19 @@ static inline int ip_local_deliver_finish(struct sk_buff *skb)
 	rcu_read_lock();
 	{
 		/* Note: See raw.c and net/raw.h, RAWV4_HTABLE_SIZE==MAX_INET_PROTOS */
+		// 得到IP报头封装的传输层协议类型值
 		int protocol = skb->nh.iph->protocol;
 		int hash;
 		struct sock *raw_sk;
 		struct net_protocol *ipprot;
 
 	resubmit:
+		// 生成与协议变量protocol对应的查表索引值
 		hash = protocol & (MAX_INET_PROTOS - 1);
+
+		// 判断与protocol对应的协议是否通过原始套接字接收数据
+		// 如果是，则返回对应原始套接字，并通过raw_v4_input函数
+		// 来接收套接字缓冲区中的数据内容
 		raw_sk = sk_head(&raw_v4_htable[hash]);
 
 		/* If there maybe a raw socket we must check - if not we
@@ -231,6 +239,11 @@ static inline int ip_local_deliver_finish(struct sk_buff *skb)
 		if (raw_sk)
 			raw_v4_input(skb, skb->nh.iph, hash);
 
+		// 从表inet_protos得到管理protocol协议接受方法的struct net_protocol类型变量
+		// 保存在ippprot中：
+			// protocol指示为UDP协议，则ipprot = &udp_protocol;
+			// protocol指示为ICMP协议，则ipprot = &icmp_protocol;
+		// 这里的hash是与protocol对应的查表索引值
 		if ((ipprot = inet_protos[hash]) != NULL) {
 			int ret;
 
@@ -240,6 +253,9 @@ static inline int ip_local_deliver_finish(struct sk_buff *skb)
 				kfree_skb(skb);
 				goto out;
 			}
+			// 通过ipprot的handler指针调用上层协议的接收函数
+				// protocol指示为UDP协议，则调用函数udp_rcv；
+				// protocol指示为ICMP协议，则调用函数icmp_rcv；
 			ret = ipprot->handler(skb);
 			if (ret < 0) {
 				protocol = -ret;
@@ -247,6 +263,8 @@ static inline int ip_local_deliver_finish(struct sk_buff *skb)
 			}
 			IP_INC_STATS_BH(IPSTATS_MIB_INDELIVERS);
 		} else {
+			// 如果上层模块没有接收缓冲区数据的套接字，
+			// 则发送一个目的不可达的ICMP报文通知对方
 			if (!raw_sk) {
 				if (xfrm4_policy_check(NULL, XFRM_POLICY_IN, skb)) {
 					IP_INC_STATS_BH(IPSTATS_MIB_INUNKNOWNPROTOS);
@@ -273,12 +291,15 @@ int ip_local_deliver(struct sk_buff *skb)
 	 *	Reassemble IP fragments.
 	 */
 
+	// 如果IP包在发送时被分成多个小片，则调用ip_defrag重组IP包
+	// 完成重组的IP包被存放在套接字缓冲区中
 	if (skb->nh.iph->frag_off & htons(IP_MF|IP_OFFSET)) {
 		skb = ip_defrag(skb);
 		if (!skb)
 			return 0;
 	}
 
+	// 递交给ip_local_deliver_finish做进一步处理
 	return NF_HOOK(PF_INET, NF_IP_LOCAL_IN, skb, skb->dev, NULL,
 		       ip_local_deliver_finish);
 }
@@ -292,6 +313,8 @@ static inline int ip_rcv_finish(struct sk_buff *skb)
 	 *	Initialise the virtual path cache for the packet. It describes
 	 *	how the packet travels inside Linux networking.
 	 */ 
+	// 如果套接字缓冲区skb还未记录路由表项信息，则需要用ip_route_input查找路由表
+	// 为skb设置路由表项信息
 	if (skb->dst == NULL) {
 		if (ip_route_input(skb, iph->daddr, iph->saddr, iph->tos, dev))
 			goto drop; 
@@ -308,6 +331,8 @@ static inline int ip_rcv_finish(struct sk_buff *skb)
 	}
 #endif
 
+	// 如果IP报头长度大于20字节，则报头携带了IP选项信息 
+	// 调用函数skb_cow来确定skb是否被共享而可写入，以确保缓冲修改的安全性
 	if (iph->ihl > 5) {
 		struct ip_options *opt;
 
@@ -324,10 +349,11 @@ static inline int ip_rcv_finish(struct sk_buff *skb)
 			goto drop;
 		}
 		iph = skb->nh.iph;
-
+		// 函数ip_options_compile从数据包收集选项信息
 		if (ip_options_compile(NULL, skb))
 			goto inhdr_error;
 
+		// 检查数据包是否设置了源路由选项，并给予处理
 		opt = &(IPCB(skb)->opt);
 		if (opt->srr) {
 			struct in_device *in_dev = in_dev_get(dev);
@@ -341,11 +367,12 @@ static inline int ip_rcv_finish(struct sk_buff *skb)
 				}
 				in_dev_put(in_dev);
 			}
+			// 调用ip_options_rcv_srr处理选项
 			if (ip_options_rcv_srr(skb))
 				goto drop;
 		}
 	}
-
+	// 通过接口dst_input确定对数据包的处理：递交给上层协议模块/转发
 	return dst_input(skb);
 
 inhdr_error:
@@ -365,6 +392,7 @@ int ip_rcv(struct sk_buff *skb, struct net_device *dev, struct packet_type *pt)
 	/* When the interface is in promisc. mode, drop all the crap
 	 * that it receives, do not try to analyse it.
 	 */
+	// 丢弃发给其他主机的数据包
 	if (skb->pkt_type == PACKET_OTHERHOST)
 		goto drop;
 
@@ -374,10 +402,10 @@ int ip_rcv(struct sk_buff *skb, struct net_device *dev, struct packet_type *pt)
 		IP_INC_STATS_BH(IPSTATS_MIB_INDISCARDS);
 		goto out;
 	}
-
+	// 检查数据包长度是否为IP头部的长度
 	if (!pskb_may_pull(skb, sizeof(struct iphdr)))
 		goto inhdr_error;
-
+	// 得到IP包的包头起始位置iph 
 	iph = skb->nh.iph;
 
 	/*
@@ -390,20 +418,21 @@ int ip_rcv(struct sk_buff *skb, struct net_device *dev, struct packet_type *pt)
 	 *	3.	Checksums correctly. [Speed optimisation for later, skip loopback checksums]
 	 *	4.	Doesn't have a bogus length
 	 */
-
+	// 检查数据包是否为IPv4格式包
 	if (iph->ihl < 5 || iph->version != 4)
 		goto inhdr_error; 
-
+	// 检查套接字缓冲区是否足够容纳数据包指定长度的报头
 	if (!pskb_may_pull(skb, iph->ihl*4))
 		goto inhdr_error;
 
 	iph = skb->nh.iph;
-
+	// 检查校验和
 	if (ip_fast_csum((u8 *)iph, iph->ihl) != 0)
 		goto inhdr_error; 
 
 	{
 		__u32 len = ntohs(iph->tot_len); 
+		// 检查IP包的总长度是否正确
 		if (skb->len < len || len < (iph->ihl<<2))
 			goto inhdr_error;
 
@@ -411,13 +440,14 @@ int ip_rcv(struct sk_buff *skb, struct net_device *dev, struct packet_type *pt)
 		 * is IP we can trim to the true length of the frame.
 		 * Note this now means skb->len holds ntohs(iph->tot_len).
 		 */
+		// 去掉填充的字段
 		if (skb->len > len) {
 			__pskb_trim(skb, len);
 			if (skb->ip_summed == CHECKSUM_HW)
 				skb->ip_summed = CHECKSUM_NONE;
 		}
 	}
-
+	// 由过滤器调用ip_rcv_finish函数，进一步处理数据包
 	return NF_HOOK(PF_INET, NF_IP_PRE_ROUTING, skb, dev, NULL,
 		       ip_rcv_finish);
 

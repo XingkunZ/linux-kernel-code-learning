@@ -170,6 +170,7 @@ int ip_build_and_send_pkt(struct sk_buff *skb, struct sock *sk,
 
 static inline int ip_finish_output2(struct sk_buff *skb)
 {
+	// 通过套接字缓冲区的struct dst_entry指针访问邻居子系统
 	struct dst_entry *dst = skb->dst;
 	struct hh_cache *hh = dst->hh;
 	struct net_device *dev = dst->dev;
@@ -194,6 +195,8 @@ static inline int ip_finish_output2(struct sk_buff *skb)
 	nf_debug_ip_finish_output2(skb);
 #endif /*CONFIG_NETFILTER_DEBUG*/
 
+	// 如果有缓存指针hh，则通过hh->output发送数据
+	// 如果缓存指针hh为空，则通过dst->neighbour->output发送数据 
 	if (hh) {
 		int hh_alen;
 
@@ -202,9 +205,11 @@ static inline int ip_finish_output2(struct sk_buff *skb)
   		memcpy(skb->data - hh_alen, hh->hh_data, hh_alen);
 		read_unlock_bh(&hh->hh_lock);
 	        skb_push(skb, hh->hh_len);
+		// hh_output指向一个发送数据的接口函数，比如dev_queue_xmit
 		return hh->hh_output(skb);
 	} else if (dst->neighbour)
-		return dst->neighbour->output(skb);
+		// output指向一个发送数据的接口函数，比如dev_queue_xmit
+		return dst->neighbour->odev_queue_xmitutput(skb);
 
 	if (net_ratelimit())
 		printk(KERN_DEBUG "ip_finish_output2: No header cache and no neighbour!\n");
@@ -216,9 +221,12 @@ int ip_finish_output(struct sk_buff *skb)
 {
 	struct net_device *dev = skb->dst->dev;
 
+	// 设置套接字缓冲区数据的发送设备
 	skb->dev = dev;
+	// 设置所用的协议为IP协议
 	skb->protocol = htons(ETH_P_IP);
 
+	// 通过过滤器进入ip_finish_output2
 	return NF_HOOK(PF_INET, NF_IP_POST_ROUTING, skb, NULL, dev,
 		       ip_finish_output2);
 }
@@ -290,6 +298,7 @@ int ip_output(struct sk_buff **pskb)
 
 	IP_INC_STATS(IPSTATS_MIB_OUTREQUESTS);
 
+	// 如果数据包太大而不能再网络设备上传输，则将其分成一些小分片
 	if ((skb->len > dst_pmtu(skb->dst) || skb_shinfo(skb)->frag_list) &&
 	    !skb_shinfo(skb)->tso_size)
 		return ip_fragment(skb, ip_finish_output);
